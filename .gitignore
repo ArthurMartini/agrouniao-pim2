@@ -1,0 +1,6 @@
+# binários e arquivos gerados pelo programa
+agrouniao
+*.o
+*.exe
+plantios.txt
+relatorio.txt
