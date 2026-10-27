@@ -1,6 +1,5 @@
 -- Demonstracao C <-> PostgreSQL: rodar logo apos registrar a operacao no programa
--- psql -h localhost -U <usuario> -d agrouniao -f demo_select.sql
-\x off
+-- psql -d agrouniao -f database/demo_select.sql
 SELECT pl.id, pr.nome AS produtor, pl.cultura, pl.area_plantada,
        ps.volume_previsto, s.volume_colhido, s.data_colheita
 FROM plantio pl
