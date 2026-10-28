@@ -52,7 +52,7 @@ VLAN 99 (Gerência): administração do firewall, do switch e do ponto de acesso
 
 ### Comunicação entre Serviços
 
-O caminho de uma leitura de sensor tem seis passos: (1) o sensor transmite o pacote por rádio LoRa ao gateway; (2) o computador de borda encaminha o pacote ao servidor de rede LoRaWAN por conexão TLS iniciada por ele mesmo e, se a internet estiver indisponível, mantém os pacotes em fila local e os envia quando a conexão volta (RNF01 e RN03); (3) o servidor de rede valida o pacote, descarta duplicatas e verifica os contadores de quadro; (4) entrega a mensagem ao servidor de aplicação por MQTT ou HTTPS; (5) a aplicação grava a leitura no PostgreSQL por conexão SQL protegida por TLS e avalia a regra de alerta (RN04); (6) os usuários consultam os dados por HTTPS, em interface web ou mobile.
+O caminho de uma leitura de sensor tem seis passos: (1) o sensor transmite o pacote por rádio LoRa ao gateway; (2) o computador de borda encaminha o pacote ao servidor de rede LoRaWAN por conexão TLS iniciada por ele mesmo e, se a internet estiver indisponível, mantém os pacotes em fila local e os envia quando a conexão volta (RNF01 e RN03); (3) o servidor de rede valida o pacote, descarta duplicatas e verifica os contadores de quadro; (4) entrega a mensagem ao servidor de aplicação por MQTT ou HTTPS; (5) a aplicação grava a leitura no SQL Server por conexão SQL protegida por TLS e avalia a regra de alerta (RN04); (6) os usuários consultam os dados por HTTPS, em interface web ou mobile.
 
 
 ### Utilização de Computação em Nuvem

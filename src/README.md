@@ -9,7 +9,7 @@ O programa pede login e abre um menu conforme o perfil:
 | Produtor | `produtor` | cadastrar plantio, listar os seus plantios, registrar colheita |
 | Gestor | `gestor` | listar plantios, previsão por cultura, pagamento proporcional, relatório |
 
-Com o PostgreSQL disponível, cada cadastro e cada colheita é gravado no banco na hora. Sem conexão, o programa avisa na abertura e usa o arquivo `plantios.txt`.
+Com o SQL Server disponível (conexão ODBC), cada cadastro e cada colheita é gravado no banco na hora. Sem conexão, o programa avisa na abertura e usa o arquivo `plantios.txt`.
 
 Funções principais:
 - `previsaoSafra`: área multiplicada pela produtividade própria ou pela média regional.

@@ -1,11 +1,14 @@
-# Banco de dados (PostgreSQL 16)
+# Banco de dados (SQL Server)
 
 Modelo da Etapa 4 do PIM II. O script `agrouniao_schema.sql` cria as tabelas e carrega dados de exemplo.
 
+SQL Server 2019 ou superior. O script cria o banco `agrouniao` (se não existir), as tabelas e os dados de exemplo:
+
 ```bash
-createdb agrouniao
-psql -d agrouniao -f database/agrouniao_schema.sql
+sqlcmd -S localhost -E -f 65001 -i database/agrouniao_schema.sql
 ```
+
+Ou abra o arquivo no SSMS e execute (F5).
 
 | Tabela | Papel |
 |---|---|

@@ -1,21 +1,27 @@
--- AgroUnião — modelo físico (PostgreSQL 16)
+﻿-- AgroUnião — modelo físico (SQL Server 2019 ou superior, T-SQL)
 -- Etapa 4 — Modelagem de Banco de Dados
+-- Executar no SSMS ou com: sqlcmd -S localhost -E -i agrouniao_schema.sql
+
+IF DB_ID(N'agrouniao') IS NULL CREATE DATABASE agrouniao;
+GO
+USE agrouniao;
+GO
 
 CREATE TABLE cooperativa (
-    id    SERIAL PRIMARY KEY,
+    id    INT IDENTITY(1,1) PRIMARY KEY,
     nome  VARCHAR(150) NOT NULL,
     cnpj  VARCHAR(18)  NOT NULL UNIQUE
 );
 
 CREATE TABLE produtor (
-    id              SERIAL PRIMARY KEY,
+    id              INT IDENTITY(1,1) PRIMARY KEY,
     nome            VARCHAR(150) NOT NULL,
     cpf             VARCHAR(14)  NOT NULL UNIQUE,
     cooperativa_id  INT NOT NULL REFERENCES cooperativa(id)
 );
 
 CREATE TABLE propriedade (
-    id           SERIAL PRIMARY KEY,
+    id           INT IDENTITY(1,1) PRIMARY KEY,
     nome         VARCHAR(150) NOT NULL,
     area         NUMERIC(10,2) NOT NULL CHECK (area > 0),
     localizacao  VARCHAR(255),
@@ -23,7 +29,7 @@ CREATE TABLE propriedade (
 );
 
 CREATE TABLE plantio (
-    id                   SERIAL PRIMARY KEY,
+    id                   INT IDENTITY(1,1) PRIMARY KEY,
     cultura              VARCHAR(80)   NOT NULL,
     area_plantada        NUMERIC(10,2) NOT NULL CHECK (area_plantada > 0),
     data_plantio         DATE NOT NULL,
@@ -33,36 +39,38 @@ CREATE TABLE plantio (
 );
 
 CREATE TABLE previsao_safra (
-    id                SERIAL PRIMARY KEY,
+    id                INT IDENTITY(1,1) PRIMARY KEY,
     plantio_id        INT NOT NULL REFERENCES plantio(id),
     volume_previsto   NUMERIC(12,2) NOT NULL CHECK (volume_previsto >= 0),
-    data_calculo      DATE NOT NULL DEFAULT CURRENT_DATE
+    data_calculo      DATE NOT NULL DEFAULT CAST(GETDATE() AS DATE)
 );
 
 CREATE TABLE safra (
-    id              SERIAL PRIMARY KEY,
-    plantio_id      INT NOT NULL UNIQUE REFERENCES plantio(id),   -- relação 1:1
+    id              INT IDENTITY(1,1) PRIMARY KEY,
+    plantio_id      INT NOT NULL,
     volume_colhido  NUMERIC(12,2) NOT NULL CHECK (volume_colhido >= 0),
-    data_colheita   DATE NOT NULL
+    data_colheita   DATE NOT NULL,
+    CONSTRAINT uq_safra_plantio UNIQUE (plantio_id),   -- relação 1:1
+    CONSTRAINT fk_safra_plantio FOREIGN KEY (plantio_id) REFERENCES plantio(id)
 );
 
 CREATE TABLE leitura_sensor (
-    id              BIGSERIAL PRIMARY KEY,
+    id              BIGINT IDENTITY(1,1) PRIMARY KEY,
     propriedade_id  INT NOT NULL REFERENCES propriedade(id),
     umidade         NUMERIC(5,2) CHECK (umidade BETWEEN 0 AND 100),
     temperatura     NUMERIC(5,2),
-    data_hora       TIMESTAMP NOT NULL DEFAULT now()
+    data_hora       DATETIME2(0) NOT NULL DEFAULT SYSDATETIME()
 );
 CREATE INDEX idx_leitura_prop_data ON leitura_sensor (propriedade_id, data_hora DESC);
 
 CREATE TABLE comprador (
-    id    SERIAL PRIMARY KEY,
+    id    INT IDENTITY(1,1) PRIMARY KEY,
     nome  VARCHAR(150) NOT NULL,
     tipo  VARCHAR(40)  NOT NULL
 );
 
 CREATE TABLE negociacao (
-    id              SERIAL PRIMARY KEY,
+    id              INT IDENTITY(1,1) PRIMARY KEY,
     volume          NUMERIC(12,2) NOT NULL CHECK (volume > 0),
     preco           NUMERIC(12,2) NOT NULL CHECK (preco > 0),   -- preço por unidade
     data            DATE NOT NULL,
@@ -71,25 +79,27 @@ CREATE TABLE negociacao (
 );
 
 CREATE TABLE pagamento (
-    id              SERIAL PRIMARY KEY,
+    id              INT IDENTITY(1,1) PRIMARY KEY,
     valor           NUMERIC(12,2) NOT NULL CHECK (valor >= 0),
     data            DATE NOT NULL,
     produtor_id     INT NOT NULL REFERENCES produtor(id),
     negociacao_id   INT NOT NULL REFERENCES negociacao(id)
 );
 
+GO
+
 -- ---------------------------------------------------------------
 -- Dados de exemplo (apenas para validar o modelo)
 -- ---------------------------------------------------------------
-INSERT INTO cooperativa (nome, cnpj) VALUES ('Cooperativa AgroUnião', '12.345.678/0001-90');
+INSERT INTO cooperativa (nome, cnpj) VALUES (N'Cooperativa AgroUnião', '12.345.678/0001-90');
 
 INSERT INTO produtor (nome, cpf, cooperativa_id) VALUES
  ('Produtor A', '111.111.111-11', 1),
  ('Produtor B', '222.222.222-22', 1);
 
 INSERT INTO propriedade (nome, area, localizacao, produtor_id) VALUES
- ('Sítio Boa Vista', 12.50, 'Zona rural - norte', 1),
- ('Sítio Água Clara', 8.00,  'Zona rural - sul',   2);
+ (N'Sítio Boa Vista', 12.50, 'Zona rural - norte', 1),
+ (N'Sítio Água Clara', 8.00,  'Zona rural - sul',   2);
 
 INSERT INTO plantio (cultura, area_plantada, data_plantio, data_prev_colheita, propriedade_id) VALUES
  ('Tomate', 5.00, '2026-03-01', '2026-06-15', 1),

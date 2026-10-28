@@ -8,22 +8,31 @@
  *   RF08 - pagamento proporcional por cooperado (RN02)
  *
  * Acesso: login com dois perfis (Produtor e Gestor), cada um com seu menu.
- * Persistencia: PostgreSQL via libpq (compilar com -DUSE_PG). Sem o banco,
+ * Persistencia: SQL Server via ODBC (compilar com -DUSE_DB). Sem o banco,
  * o programa avisa e usa o arquivo plantios.txt (modo arquivo).
  *
- * Compilar com banco:
- *   gcc -std=c99 -Wall -Wextra -DUSE_PG -I/usr/include/postgresql \
- *       -o agrouniao agrouniao.c -lpq
+ * Compilar com banco (Windows, MinGW-w64):
+ *   gcc -std=c99 -Wall -Wextra -DUSE_DB -o agrouniao agrouniao.c -lodbc32
+ * Compilar com banco (Linux, unixODBC):
+ *   gcc -std=c99 -Wall -Wextra -DUSE_DB -o agrouniao agrouniao.c -lodbc
  * Compilar so com arquivo:
  *   gcc -std=c99 -Wall -Wextra -o agrouniao agrouniao.c
- * Conexao: variavel de ambiente AGRO_DB (padrao "dbname=agrouniao"), ex.:
- *   AGRO_DB="host=localhost dbname=agrouniao user=claude password=..."
+ * Conexao: variavel de ambiente AGRO_DB com a connection string ODBC
+ * (padrao: SQL Server local, autenticacao do Windows, banco agrouniao), ex.:
+ *   AGRO_DB="Driver={ODBC Driver 17 for SQL Server};Server=localhost;
+ *           Database=agrouniao;UID=usuario;PWD=senha;TrustServerCertificate=yes;"
+ *   (digitar tudo em uma unica linha)
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef USE_PG
-#include <libpq-fe.h>
+#ifdef USE_DB
+#include <stdint.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include <sql.h>
+#include <sqlext.h>
 #endif
 
 #define MAX_PLANTIOS 100
@@ -194,17 +203,46 @@ static int salvar(const Plantio v[], int n)
 
 
 /* ---------------------------------------------------------- banco */
-#ifdef USE_PG
-static PGconn *g_db = NULL;
+#ifdef USE_DB
+#define TAM_CAMPO 128
+
+static SQLHENV g_env = SQL_NULL_HENV;
+static SQLHDBC g_dbc = SQL_NULL_HDBC;
+
+static void dbMostrarErro(SQLSMALLINT tipo, SQLHANDLE h)
+{
+    SQLCHAR estado[8], msg[512];
+    SQLINTEGER nativo;
+    SQLSMALLINT tam;
+    if (SQL_SUCCEEDED(SQLGetDiagRec(tipo, h, 1, estado, &nativo,
+                                    msg, (SQLSMALLINT)sizeof msg, &tam)))
+        printf("  %s\n", (char *)msg);
+}
 
 static int dbConectar(void)
 {
     const char *ci = getenv("AGRO_DB");
-    g_db = PQconnectdb(ci != NULL ? ci : "dbname=agrouniao");
-    if (PQstatus(g_db) != CONNECTION_OK) {
-        printf("Aviso: sem conexao com o banco.\n  %s", PQerrorMessage(g_db));
-        PQfinish(g_db);
-        g_db = NULL;
+    SQLCHAR saida[512];
+    SQLSMALLINT tam;
+    SQLRETURN rc;
+    if (ci == NULL)
+        ci = "Driver={ODBC Driver 17 for SQL Server};Server=localhost;"
+             "Database=agrouniao;Trusted_Connection=yes;"
+             "TrustServerCertificate=yes;";
+    if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &g_env)))
+        return 0;
+    SQLSetEnvAttr(g_env, SQL_ATTR_ODBC_VERSION,
+                  (SQLPOINTER)(intptr_t)SQL_OV_ODBC3, 0);
+    SQLAllocHandle(SQL_HANDLE_DBC, g_env, &g_dbc);
+    rc = SQLDriverConnect(g_dbc, NULL, (SQLCHAR *)ci, SQL_NTS, saida,
+                          (SQLSMALLINT)sizeof saida, &tam, SQL_DRIVER_NOPROMPT);
+    if (!SQL_SUCCEEDED(rc)) {
+        printf("Aviso: sem conexao com o banco.\n");
+        dbMostrarErro(SQL_HANDLE_DBC, g_dbc);
+        SQLFreeHandle(SQL_HANDLE_DBC, g_dbc);
+        SQLFreeHandle(SQL_HANDLE_ENV, g_env);
+        g_dbc = SQL_NULL_HDBC;
+        g_env = SQL_NULL_HENV;
         return 0;
     }
     return 1;
@@ -212,21 +250,59 @@ static int dbConectar(void)
 
 static void dbDesconectar(void)
 {
-    if (g_db != NULL) PQfinish(g_db);
-    g_db = NULL;
+    if (g_dbc != SQL_NULL_HDBC) {
+        SQLDisconnect(g_dbc);
+        SQLFreeHandle(SQL_HANDLE_DBC, g_dbc);
+    }
+    if (g_env != SQL_NULL_HENV) SQLFreeHandle(SQL_HANDLE_ENV, g_env);
+    g_dbc = SQL_NULL_HDBC;
+    g_env = SQL_NULL_HENV;
 }
 
-/* Executa SQL parametrizado (sem concatenar texto do usuario no SQL). */
-static PGresult *dbExec(const char *sql, int np, const char *const *vals,
-                        ExecStatusType esperado)
+/* Executa SQL parametrizado (marcadores ?), sem concatenar texto do usuario
+ * no SQL. Devolve o statement (quem chamou libera) ou NULL em caso de erro. */
+static SQLHSTMT dbExec(const char *sql, int np, const char *const *vals)
 {
-    PGresult *r = PQexecParams(g_db, sql, np, NULL, vals, NULL, NULL, 0);
-    if (PQresultStatus(r) != esperado) {
-        printf("Erro no banco: %s", PQerrorMessage(g_db));
-        PQclear(r);
-        return NULL;
+    SQLHSTMT st = SQL_NULL_HSTMT;
+    if (!SQL_SUCCEEDED(SQLAllocHandle(SQL_HANDLE_STMT, g_dbc, &st))) return NULL;
+    if (SQL_SUCCEEDED(SQLPrepare(st, (SQLCHAR *)sql, SQL_NTS))) {
+        for (int i = 0; i < np; i++) {
+            SQLULEN tam = strlen(vals[i]) > 0 ? strlen(vals[i]) : 1;
+            SQLBindParameter(st, (SQLUSMALLINT)(i + 1), SQL_PARAM_INPUT, SQL_C_CHAR,
+                             SQL_VARCHAR, tam, 0, (SQLPOINTER)vals[i], 0, NULL);
+        }
+        if (SQL_SUCCEEDED(SQLExecute(st))) return st;
     }
-    return r;
+    printf("Erro no banco:\n");
+    dbMostrarErro(SQL_HANDLE_STMT, st);
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
+    return NULL;
+}
+
+/* Le a coluna 'col' (1..n) como texto. Retorna 0 se o valor for NULL. */
+static int dbCampo(SQLHSTMT st, int col, char *dest, int tam)
+{
+    SQLLEN ind = 0;
+    dest[0] = '\0';
+    if (!SQL_SUCCEEDED(SQLGetData(st, (SQLUSMALLINT)col, SQL_C_CHAR,
+                                  dest, tam, &ind)))
+        return 0;
+    return ind != SQL_NULL_DATA;
+}
+
+/* ligada = 0: abre uma transacao; ligada = 1: volta ao autocommit. */
+static void dbTransacao(int ligada)
+{
+    intptr_t modo = ligada ? SQL_AUTOCOMMIT_ON : SQL_AUTOCOMMIT_OFF;
+    SQLSetConnectAttr(g_dbc, SQL_ATTR_AUTOCOMMIT, (SQLPOINTER)modo, 0);
+}
+
+static int dbFim(int confirmar)
+{
+    SQLRETURN rc = SQLEndTran(SQL_HANDLE_DBC, g_dbc,
+                              confirmar ? SQL_COMMIT : SQL_ROLLBACK);
+    dbTransacao(1);
+    return SQL_SUCCEEDED(rc);
 }
 
 static int indiceCultura(const char *nome)
@@ -245,32 +321,40 @@ static int dbCarregar(Plantio v[])
         "FROM plantio pl "
         "JOIN propriedade pp ON pp.id = pl.propriedade_id "
         "JOIN produtor pr ON pr.id = pp.produtor_id "
-        "LEFT JOIN LATERAL (SELECT volume_previsto FROM previsao_safra "
-        "                   WHERE plantio_id = pl.id ORDER BY id DESC LIMIT 1) ps "
-        "     ON TRUE "
+        "OUTER APPLY (SELECT TOP 1 volume_previsto FROM previsao_safra "
+        "             WHERE plantio_id = pl.id ORDER BY id DESC) ps "
         "LEFT JOIN safra s ON s.plantio_id = pl.id "
         "ORDER BY pl.id";
-    PGresult *r = dbExec(SQL, 0, NULL, PGRES_TUPLES_OK);
+    SQLHSTMT st = dbExec(SQL, 0, NULL);
+    char id[TAM_CAMPO], nome[TAM_NOME], cultura[TAM_CAMPO];
+    char area[TAM_CAMPO], prev[TAM_CAMPO], colhido[TAM_CAMPO];
     int n = 0, ignorados = 0;
-    if (r == NULL) return -1;
-    for (int i = 0; i < PQntuples(r); i++) {
-        int c = indiceCultura(PQgetvalue(r, i, 2));
+    if (st == NULL) return -1;
+    while (SQL_SUCCEEDED(SQLFetch(st))) {
+        int c, temPrev, temColhido;
+        dbCampo(st, 1, id, sizeof id);
+        dbCampo(st, 2, nome, sizeof nome);
+        dbCampo(st, 3, cultura, sizeof cultura);
+        dbCampo(st, 4, area, sizeof area);
+        temPrev = dbCampo(st, 5, prev, sizeof prev);
+        temColhido = dbCampo(st, 6, colhido, sizeof colhido);
+        c = indiceCultura(cultura);
         if (c < 0 || n >= MAX_PLANTIOS) { ignorados++; continue; }
-        v[n].dbId = atoi(PQgetvalue(r, i, 0));
-        snprintf(v[n].produtor, TAM_NOME, "%s", PQgetvalue(r, i, 1));
+        v[n].dbId = atoi(id);
+        snprintf(v[n].produtor, TAM_NOME, "%s", nome);
         v[n].cultura = c;
-        v[n].area = (float)atof(PQgetvalue(r, i, 3));
-        if (PQgetisnull(r, i, 4) || v[n].area <= 0) {
+        v[n].area = (float)atof(area);
+        if (!temPrev || v[n].area <= 0) {
             v[n].temHistorico = 0;
             v[n].produtividade = 0;
         } else {                       /* produtividade = previsto / area */
             v[n].temHistorico = 1;
-            v[n].produtividade = (float)atof(PQgetvalue(r, i, 4)) / v[n].area;
+            v[n].produtividade = (float)atof(prev) / v[n].area;
         }
-        v[n].colhido = PQgetisnull(r, i, 5) ? -1 : (float)atof(PQgetvalue(r, i, 5));
+        v[n].colhido = temColhido ? (float)atof(colhido) : -1;
         n++;
     }
-    PQclear(r);
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
     if (ignorados > 0)
         printf("Aviso: %d plantio(s) ignorado(s) (cultura fora da lista).\n", ignorados);
     return n;
@@ -279,71 +363,86 @@ static int dbCarregar(Plantio v[])
 /* Grava plantio + previsao de safra numa transacao. */
 static int dbInserirPlantio(const Plantio *p)
 {
-    char idProp[16], idPlantio[16], area[32], prev[32], dias[16];
+    char idProp[TAM_CAMPO], idPlantio[TAM_CAMPO], area[32], prev[32], dias[16];
     const char *v1[1] = { p->produtor };
     const char *v2[4], *v3[2];
-    PGresult *r;
+    SQLHSTMT st;
 
-    if (!dbExec("BEGIN", 0, NULL, PGRES_COMMAND_OK)) return 0;
+    dbTransacao(0);
 
-    r = dbExec("SELECT pp.id FROM propriedade pp "
-               "JOIN produtor pr ON pr.id = pp.produtor_id "
-               "WHERE pr.nome = $1 ORDER BY pp.id LIMIT 1",
-               1, v1, PGRES_TUPLES_OK);
-    if (r == NULL || PQntuples(r) == 0) {
+    st = dbExec("SELECT TOP 1 pp.id FROM propriedade pp "
+                "JOIN produtor pr ON pr.id = pp.produtor_id "
+                "WHERE pr.nome = ? ORDER BY pp.id",
+                1, v1);
+    if (st == NULL) { dbFim(0); return 0; }
+    if (!SQL_SUCCEEDED(SQLFetch(st))) {
         printf("Produtor sem propriedade cadastrada no banco.\n");
-        if (r != NULL) PQclear(r);
-        dbExec("ROLLBACK", 0, NULL, PGRES_COMMAND_OK);
+        SQLFreeHandle(SQL_HANDLE_STMT, st);
+        dbFim(0);
         return 0;
     }
-    snprintf(idProp, sizeof idProp, "%s", PQgetvalue(r, 0, 0));
-    PQclear(r);
+    dbCampo(st, 1, idProp, sizeof idProp);
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
 
     snprintf(area, sizeof area, "%.2f", p->area);
     snprintf(dias, sizeof dias, "%d", DIAS_CICLO);
     v2[0] = NOME_CULTURA[p->cultura]; v2[1] = area; v2[2] = dias; v2[3] = idProp;
-    r = dbExec("INSERT INTO plantio (cultura, area_plantada, data_plantio, "
-               "data_prev_colheita, propriedade_id) "
-               "VALUES ($1, $2, CURRENT_DATE, CURRENT_DATE + $3::int, $4) "
-               "RETURNING id", 4, v2, PGRES_TUPLES_OK);
-    if (r == NULL) { dbExec("ROLLBACK", 0, NULL, PGRES_COMMAND_OK); return 0; }
-    snprintf(idPlantio, sizeof idPlantio, "%s", PQgetvalue(r, 0, 0));
-    PQclear(r);
+    st = dbExec("INSERT INTO plantio (cultura, area_plantada, data_plantio, "
+                "data_prev_colheita, propriedade_id) "
+                "OUTPUT INSERTED.id "
+                "VALUES (?, CAST(? AS NUMERIC(10,2)), CAST(GETDATE() AS DATE), "
+                "DATEADD(DAY, CAST(? AS INT), CAST(GETDATE() AS DATE)), "
+                "CAST(? AS INT))",
+                4, v2);
+    if (st == NULL) { dbFim(0); return 0; }
+    if (!SQL_SUCCEEDED(SQLFetch(st))) {
+        SQLFreeHandle(SQL_HANDLE_STMT, st);
+        dbFim(0);
+        return 0;
+    }
+    dbCampo(st, 1, idPlantio, sizeof idPlantio);
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
 
     snprintf(prev, sizeof prev, "%.2f", previsaoSafra(p));
     v3[0] = idPlantio; v3[1] = prev;
-    r = dbExec("INSERT INTO previsao_safra (plantio_id, volume_previsto) "
-               "VALUES ($1, $2)", 2, v3, PGRES_COMMAND_OK);
-    if (r == NULL) { dbExec("ROLLBACK", 0, NULL, PGRES_COMMAND_OK); return 0; }
-    PQclear(r);
+    st = dbExec("INSERT INTO previsao_safra (plantio_id, volume_previsto) "
+                "VALUES (CAST(? AS INT), CAST(? AS NUMERIC(12,2)))", 2, v3);
+    if (st == NULL) { dbFim(0); return 0; }
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
 
-    r = dbExec("COMMIT", 0, NULL, PGRES_COMMAND_OK);
-    if (r == NULL) return 0;
-    PQclear(r);
-    return 1;
+    return dbFim(1);
 }
 
-/* Registra (ou corrige) a colheita; safra e 1:1 com plantio. */
+/* Registra (ou corrige) a colheita; safra e 1:1 com plantio.
+ * Tenta UPDATE; se nenhuma linha mudou, faz o INSERT. */
 static int dbRegistrarColheita(int plantioId, float kg)
 {
     char id[16], vol[32];
     const char *v[2];
-    PGresult *r;
+    SQLHSTMT st;
+    SQLLEN linhas = 0;
     snprintf(id, sizeof id, "%d", plantioId);
     snprintf(vol, sizeof vol, "%.2f", kg);
+
+    v[0] = vol; v[1] = id;
+    st = dbExec("UPDATE safra SET volume_colhido = CAST(? AS NUMERIC(12,2)), "
+                "data_colheita = CAST(GETDATE() AS DATE) "
+                "WHERE plantio_id = CAST(? AS INT)", 2, v);
+    if (st == NULL) return 0;
+    SQLRowCount(st, &linhas);
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
+    if (linhas > 0) return 1;
+
     v[0] = id; v[1] = vol;
-    r = dbExec("INSERT INTO safra (plantio_id, volume_colhido, data_colheita) "
-               "VALUES ($1, $2, CURRENT_DATE) "
-               "ON CONFLICT (plantio_id) DO UPDATE SET "
-               "volume_colhido = EXCLUDED.volume_colhido, "
-               "data_colheita = EXCLUDED.data_colheita",
-               2, v, PGRES_COMMAND_OK);
-    if (r == NULL) return 0;
-    PQclear(r);
+    st = dbExec("INSERT INTO safra (plantio_id, volume_colhido, data_colheita) "
+                "VALUES (CAST(? AS INT), CAST(? AS NUMERIC(12,2)), "
+                "CAST(GETDATE() AS DATE))", 2, v);
+    if (st == NULL) return 0;
+    SQLFreeHandle(SQL_HANDLE_STMT, st);
     return 1;
 }
 #else
-/* Sem -DUSE_PG: apenas modo arquivo. */
+/* Sem -DUSE_DB: apenas modo arquivo. */
 static int dbConectar(void) { return 0; }
 static void dbDesconectar(void) { }
 static int dbCarregar(Plantio v[]) { (void)v; return -1; }
@@ -528,7 +627,7 @@ int main(void)
     const Usuario *u;
 
     printf("=== AgroUniao ===\nBanco de dados: %s\n\n",
-           online ? "CONECTADO (PostgreSQL)" : "OFFLINE - usando arquivo");
+           online ? "CONECTADO (SQL Server)" : "OFFLINE - usando arquivo");
     u = login();
     if (u == NULL) { printf("Acesso negado.\n"); dbDesconectar(); return 1; }
 

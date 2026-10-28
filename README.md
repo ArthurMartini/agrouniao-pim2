@@ -18,24 +18,30 @@ Projeto Integrado Multidisciplinar (PIM II) do curso de Análise e Desenvolvimen
 
 ```
 src/        programa em C (agrouniao.c)
-database/   script do banco PostgreSQL, consultas e SELECT da demonstração
+database/   script do banco SQL Server, consultas e SELECT da demonstração
 docs/       documento do PIM II e diagramas UML
 ```
 
-## Banco de dados (PostgreSQL 16)
+## Banco de dados (SQL Server)
+
+SQL Server 2019 ou superior (Express serve). O script cria o banco `agrouniao`, as tabelas e os dados de exemplo:
 
 ```bash
-createdb agrouniao
-psql -d agrouniao -f database/agrouniao_schema.sql
+sqlcmd -S localhost -E -f 65001 -i database/agrouniao_schema.sql
 ```
+
+Ou abra `database/agrouniao_schema.sql` no SSMS e execute (F5).
 
 ## Programa em C
 
-Com banco (libpq):
+Com banco (ODBC; precisa do *ODBC Driver 17 ou 18 for SQL Server*):
 
 ```bash
-gcc -std=c99 -Wall -Wextra -DUSE_PG -I/usr/include/postgresql -o agrouniao src/agrouniao.c -lpq
-AGRO_DB="host=localhost dbname=agrouniao user=SEU_USUARIO password=SUA_SENHA" ./agrouniao
+gcc -std=c99 -Wall -Wextra -DUSE_DB -o agrouniao src/agrouniao.c -lodbc32   # Windows (MinGW-w64)
+# Linux: troque -lodbc32 por -lodbc
+# conexão padrão: SQL Server local, autenticação do Windows
+# outra conexão (variável AGRO_DB, string de conexão ODBC):
+AGRO_DB="Driver={ODBC Driver 17 for SQL Server};Server=localhost;Database=agrouniao;UID=SEU_USUARIO;PWD=SUA_SENHA;TrustServerCertificate=yes;" ./agrouniao
 ```
 
 Somente arquivo (sem banco):
@@ -59,5 +65,5 @@ Ao abrir, o programa informa se está conectado ao banco ou em modo arquivo.
 Depois de cadastrar um plantio ou registrar uma colheita no programa:
 
 ```bash
-psql -d agrouniao -f database/demo_select.sql
+sqlcmd -S localhost -E -d agrouniao -f 65001 -i database\demo_select.sql
 ```

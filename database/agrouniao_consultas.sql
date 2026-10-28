@@ -1,3 +1,6 @@
+USE agrouniao;
+GO
+
 -- Consulta 1 — produção colhida por propriedade e cultura
 SELECT p.nome AS propriedade, pl.cultura, s.volume_colhido, s.data_colheita
 FROM safra s
@@ -27,11 +30,10 @@ FROM producao
 ORDER BY nome;
 
 -- Consulta 4 — leituras recentes de uma propriedade (RF07)
-SELECT data_hora, umidade, temperatura
+SELECT TOP 10 data_hora, umidade, temperatura
 FROM leitura_sensor
 WHERE propriedade_id = 1
-ORDER BY data_hora DESC
-LIMIT 10;
+ORDER BY data_hora DESC;
 
 -- Consulta 5 — previsto x realizado por propriedade (RF03 e RF04)
 SELECT p.nome AS propriedade,
